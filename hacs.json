@@ -1,0 +1,7 @@
+{
+  "name": "grid-template-card",
+  "content_in_root": true,
+  "render_readme": true,
+  "filename": "grid_template_card.js",
+  "homeassistant": "2023.10.0"
+}
