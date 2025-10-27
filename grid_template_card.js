@@ -1,336 +1,306 @@
+//v2.0.0
 class GridTemplateCard extends HTMLElement {
   constructor() {
     super();
     this.attachShadow({ mode: 'open' });
     this._hass = null;
-    this._config = null;
-
-    // 首帧同步渲染控制
-    this._initialMounted = false;      // 是否已完成首帧内容挂载
-    this._pendingBatch = false;        // 是否正在批量创建子卡
+    this._finalConfig = {};
+    this._variables = {};
+    this._initialMounted = false;
+    this.BUILT_IN_AREAS = ['name', 'label', 'state', 'icon'];
+    this.AREA_SHORTHANDS = { n: 'name', l: 'label', s: 'state', i: 'icon' };
   }
 
+  /* ================== Home Assistant Lifecycle ================== */
+
   setConfig(config) {
-    if (!config.grid_areas || typeof config.grid_areas !== 'object') {
-      throw new Error("grid-template-card: Missing or invalid 'grid_areas'");
+    if (!config) throw new Error("grid-template-card: 配置无效。");
+    const { finalCfg, finalVars } = this._resolveTemplatesAndVariables(config);
+    this._finalConfig = finalCfg || {};
+    this._variables = finalVars || {};
+    for (const [short, long] of Object.entries(this.AREA_SHORTHANDS)) {
+      if (this._finalConfig[short] !== undefined) {
+        this._finalConfig[long] = this._finalConfig[short];
+        delete this._finalConfig[short];
+      }
     }
-    this._config = config;
-    this._renderSkeleton();   // 首次只渲染骨架（空格子，visibility:hidden）
-    this._maybeMountBatch();  // 视情况触发批量创建子卡
+    if (!this.shadowRoot.querySelector('.grid-container')) this._render();
   }
 
   set hass(hass) {
+    if (!hass) return;
+    const oldHass = this._hass;
     this._hass = hass;
-
-    // hass 到达后尝试进行首帧批量挂载
-    this._maybeMountBatch();
-
-    // 首帧之后，后续样式/模板更新
-    if (this._initialMounted) {
-      this._applyDynamicStyles();
-      // 将 hass 透传给子卡
-      const items = this.shadowRoot?.querySelectorAll(".grid-item") || [];
-      items.forEach((item) => {
-        const card = item.firstElementChild;
-        if (card && card.hass !== hass) {
-          card.hass = hass;
-        }
-      });
-    }
-  }
-
-  get hass() {
-    return this._hass;
-  }
-
-  /* ===================== 工具与模板 ===================== */
-
-  // 模板求值：模板在 !hass 时返回空串，避免首帧写入无效值
-  _evalTemplate(value) {
-    if (typeof value !== 'string') return value;
-    const trimmed = value.trim();
-    const isTemplate = trimmed.startsWith('[[[') && trimmed.endsWith(']]]');
-    if (!isTemplate) return value;
-    if (!this._hass) return '';
-
-    try {
-      const code = trimmed.slice(3, -3);
-      const hass = this._hass;
-      const states = hass?.states || {};
-      const user = hass?.user;
-
-      // 简易判断：是否为语句块
-      const isBlock = /(\bvar\b|\bif\b|\blet\b|\bconst\b|;|\n|\breturn\b)/.test(code);
-      const func = new Function(
-        'hass', 'states', 'user',
-        isBlock ? `"use strict"; ${code}` : `"use strict"; return (${code})`
-      );
-      return func(hass, states, user);
-    } catch (e) {
-      console.warn('grid-template-card: 模板错误', value, e);
-      return '';
-    }
-  }
-
-  // 检测对象/字符串里是否包含 [[[ ... ]]] 模板（用于可选策略；本实现首帧无须使用）
-  _hasTemplates(obj) {
-    if (!obj) return false;
-    const stack = [obj];
-    while (stack.length) {
-      const cur = stack.pop();
-      const t = typeof cur;
-      if (t === 'string') {
-        const s = cur.trim();
-        if (s.startsWith('[[[') && s.endsWith(']]]')) return true;
-      } else if (Array.isArray(cur)) {
-        for (const it of cur) stack.push(it);
-      } else if (t === 'object') {
-        for (const v of Object.values(cur)) stack.push(v);
-      }
-    }
-    return false;
-  }
-
-  // 将数组样式 [{prop: val}, {prop: val}] 转成字符串，并对值做模板求值
-  _arrayStylesToString(arr) {
-    if (!Array.isArray(arr)) {
-      if (arr) {
-        throw new Error(
-          "grid-template-card: styles 必须使用数组形式，例如:\nstyles:\n  card:\n    - padding: 0px\n    - background: red"
-        );
-      }
-      return '';
-    }
-    const merged = {};
-    arr.forEach((item) => {
-      if (typeof item !== 'object') return;
-      Object.entries(item).forEach(([k, v]) => {
-        merged[k] = this._evalTemplate(v);
-      });
-    });
-    return Object.entries(merged)
-      .filter(([_, v]) => v !== undefined && v !== null && String(v) !== '')
-      .map(([k, v]) => `${k}: ${v};`)
-      .join(' ');
-  }
-
-  /* ===================== 首帧：骨架 + 批量挂载 ===================== */
-
-  _renderSkeleton() {
-    if (!this._config || !this.shadowRoot) return;
-
-    // 提前注入 hass（若可用，减少等待）
-    if (window.provideHass) window.provideHass(this);
-
-    const wrapper = document.createElement("div");
-    wrapper.classList.add("grid-container");
-    wrapper.style.visibility = 'hidden';     // 骨架阶段先隐藏，等内容齐备后同帧显示
-    wrapper.dataset.stage = 'skeleton';
-
-    const areas = this._config.grid_areas || {};
-    for (const areaName of Object.keys(areas)) {
-      const div = document.createElement("div");
-      div.classList.add("grid-item");
-      div.dataset.area = areaName;
-      div.style.gridArea = areaName;
-      wrapper.appendChild(div);
-    }
-
-    // 清空并挂载骨架
-    this.shadowRoot.innerHTML = '';
-    this.shadowRoot.appendChild(this._styleTag());
-    this.shadowRoot.appendChild(wrapper);
-
-    // 骨架阶段的容器样式（grid 布局先生效，保证尺寸占位稳定）
-    this._applyDynamicStyles(/*skeleton=*/true);
-  }
-
-  async _maybeMountBatch() {
-    // 仅在尚未完成首帧 && 未在进行中的情况下才触发
-    if (this._initialMounted || this._pendingBatch) return;
-
-    // 等待 hass：没有 hass 就不做首帧内容挂载，继续显示骨架
-    if (!this._hass) return;
-
-    // 开始批量创建子卡
-    this._pendingBatch = true;
-    try {
-      const wrapper = this.shadowRoot?.querySelector(".grid-container");
-      if (!wrapper) return;
-
-      const areas = this._config?.grid_areas || {};
-      const areaNames = Object.keys(areas);
-
-      // 并行创建所有卡片
-      const creationPromises = areaNames.map(async (name) => {
-        const cfg = areas[name]?.card;
-        if (!cfg) return { name, el: null };
-        const el = await this._createCard(cfg);
-        // 首帧就把 hass 透传进去，避免子卡自身迟一拍
-        el.hass = this._hass;
-        return { name, el };
-      });
-
-      const created = await Promise.all(creationPromises);
-
-      // 一次性挂载到对应格子
-      created.forEach(({ name, el }) => {
-        const slot = wrapper.querySelector(`.grid-item[data-area="${name}"]`);
-        if (!slot) return;
-        if (el) {
-          // 保守处理：清空后再塞，确保首帧全量一致
-          slot.innerHTML = '';
-          slot.appendChild(el);
-        }
-      });
-
-      // 更新样式（此时 hass 已有，模板可求值）
-      this._applyDynamicStyles(/*skeleton=*/false);
-
-      // 同一帧统一显示
-      requestAnimationFrame(() => {
-        wrapper.style.visibility = 'visible';
-        wrapper.dataset.stage = 'mounted';
+    if (!this._initialMounted || hass.states !== oldHass?.states) {
+      if (!this._initialMounted) {
         this._initialMounted = true;
-      });
-    } finally {
-      this._pendingBatch = false;
+        this._loadCards();
+      }
+      this._applyDynamicStyles();
     }
+    this.shadowRoot?.querySelectorAll(".grid-item > *:not(.built-in-element)").forEach(card => {
+      if (card) card.hass = hass;
+    });
   }
 
-  /* ===================== 常规创建与样式 ===================== */
+  /* ================== Template System ================== */
+  _evaluateTemplate(value) { if (typeof value !== 'string') return value; const s = value.trim(); if (!s.startsWith('[[[') || !s.endsWith(']]]')) return value; if (!this._hass) return ''; const _exec = (codeStr, variablesProxy) => { const hass = this._hass; const states = hass?.states || {}; const user = hass?.user; const entityId = this._finalConfig?.entity; const entity = entityId ? states[entityId] : null; const isBlock = /(\bvar\b|\bif\b|\blet\b|\bconst\b|;|\n|\breturn\b)/.test(codeStr); if (isBlock) { return Function('hass', 'states', 'entity', 'user', 'variables', 'config', 'card', `"use strict"; ${codeStr}`)(hass, states, entity, user, variablesProxy, this._finalConfig, this); } return Function('hass', 'states', 'entity', 'user', 'variables', 'config', 'card', `"use strict"; return (${codeStr})`)(hass, states, entity, user, variablesProxy, this._finalConfig, this); }; try { const rawCode = s.slice(3, -3); const variablesProxy = new Proxy(this._variables || {}, { get: (target, property, receiver) => { const value = Reflect.get(target, property, receiver); if (typeof value === 'string' && value.trim().startsWith('[[[')) { const innerCode = value.trim().slice(3, -3); return _exec(innerCode, variablesProxy); } return value; } }); return _exec(rawCode, variablesProxy); } catch (e) { console.error('grid-template-card: 模板错误', value, e); console.error('当前 variables:', this._variables); return ''; } }
 
-  async _createCard(cardConfig) {
-    const tag = cardConfig.type && cardConfig.type.startsWith("custom:")
-      ? cardConfig.type.substr(7)
-      : `hui-${cardConfig.type}-card`;
-
-    let el = document.createElement(tag);
-
-    // 如果是自定义元素且尚未注册，等待注册完成（防止首刷时序问题）
-    if (tag.includes("-") && !customElements.get(tag)) {
-      try {
-        await customElements.whenDefined(tag);
-      } catch (_) {
-        // 某些环境不会抛错，这里只是兜底
+  // **NEW**: Helper to evaluate templates within the action config object
+  _evaluateActionConfig(config) {
+    if (config === null || typeof config !== 'object') {
+      return this._evaluateTemplate(config);
+    }
+    if (Array.isArray(config)) {
+      return config.map(item => this._evaluateActionConfig(item));
+    }
+    const evaluatedConfig = {};
+    for (const key in config) {
+      if (Object.prototype.hasOwnProperty.call(config, key)) {
+        evaluatedConfig[key] = this._evaluateActionConfig(config[key]);
       }
     }
-
-    // 有些浏览器在自定义元素升级后，已创建的节点不会补上实例方法；
-    // 此时重建一次元素，确保拿到带 setConfig 的升级实例。
-    if (typeof el.setConfig !== "function" && customElements.get(tag)) {
-      el = document.createElement(tag);
-    }
-
-    // 仍然没有 setConfig，直接给出友好错误卡，避免抛到控制台
-    if (typeof el.setConfig !== "function") {
-      const err = document.createElement("hui-error-card");
-      err.setConfig({
-        type: "error",
-        error: `${tag} 未就绪或不是 Lovelace 卡片。请确认资源已以 type=module 加载，且未被延迟/重复加载。`,
-        originalConfig: cardConfig,
-      });
-      if (this._hass) err.hass = this._hass;
-      return err;
-    }
-
-    try {
-      el.setConfig(cardConfig);
-    } catch (e) {
-      console.error("grid-template-card: error creating card", e);
-      const err = document.createElement("hui-error-card");
-      err.setConfig({
-        type: "error",
-        error: e && e.message ? e.message : String(e),
-        originalConfig: cardConfig,
-      });
-      if (this._hass) err.hass = this._hass;
-      return err;
-    }
-
-    if (this._hass) el.hass = this._hass;
-    return el;
+    return evaluatedConfig;
   }
 
+  /* ================== Rendering and Styling (Unchanged) ================== */
 
-  _applyDynamicStyles(skeleton = false) {
-    if (!this._config || !this.shadowRoot) return;
-    const wrapper = this.shadowRoot.querySelector(".grid-container");
-    if (!wrapper) return;
-
-    // grid 主体样式（支持模板，但在 skeleton 阶段模板多为空串）
-    const grid = this._config.grid || [];
-    const baseStyles = {
-      display: "grid",
-      ...(grid[0] || {}),
-      ...(grid[1] || {}),
-      ...(grid[2] || {}),
-      ...(grid[3] || {}),
-      ...(grid[4] || {}),
-      ...(grid[5] || {}),
-      ...(grid[6] || {}),
-    };
-
-    // 先应用基础 grid 样式
-    let gridStyleStr = Object.entries(baseStyles)
-      .map(([k, v]) => {
-        const vv = this._evalTemplate(v);
-        return (vv !== undefined && vv !== null && String(vv) !== '') ? `${k}: ${vv};` : '';
-      })
-      .filter(Boolean)
-      .join(' ');
-
-    // 叠加 styles.card（数组）
-    gridStyleStr += this._arrayStylesToString(this._config.styles?.card);
-
-    // 注意：不要覆盖 wrapper 上我们用于阶段控制的 visibility
-    const prevVisibility = wrapper.style.visibility;
-    wrapper.style.cssText = gridStyleStr;
-    if (prevVisibility) wrapper.style.visibility = prevVisibility;
-
-    // 每个区域 styles.grid[areaName]
-    const areas = this._config.grid_areas || {};
-    for (const areaName of Object.keys(areas)) {
-      const el = this.shadowRoot.querySelector(`.grid-item[data-area="${areaName}"]`);
-      if (!el) continue;
-      el.style.gridArea = areaName; // 固定区域名
-      const gridStyles = this._config.styles?.grid?.[areaName];
-      if (gridStyles) {
-        el.style.cssText += this._arrayStylesToString(gridStyles);
-      }
-    }
-  }
-
-  _styleTag() {
+  _render() {
     const style = document.createElement("style");
     style.textContent = `
-      .grid-container {
-        width: 100%;
-        height: 100%;
-      }
-      .grid-item {
-        box-sizing: border-box;
-        min-width: 0;
-        min-height: 0;
-        overflow: visible;
-      }
+      .grid-container { display: grid; width: 100%; }
+      .grid-item { box-sizing: border-box; min-width: 0; min-height: 0; overflow: visible; display: flex; align-items: center; justify-content: center; }
+      .grid-item > * { width: 100%; height: 100%; }
+      .grid-item.icon { overflow: visible; }
+      .grid-item img { max-width: 100%; max-height: 100%; object-fit: contain; }
+      .grid-item ha-icon { width: 100%; height: 100%; }
     `;
-    return style;
+    const wrapper = document.createElement("div");
+    wrapper.className = "grid-container";
+    wrapper.addEventListener('mousedown', () => this._handleTap());
+    const customAreas = this._finalConfig.custom_grid_areas || {};
+    for (const areaName of Object.keys(customAreas)) {
+      const div = document.createElement("div");
+      div.className = "grid-item";
+      div.dataset.area = areaName;
+      wrapper.appendChild(div);
+    }
+    for (const areaName of this.BUILT_IN_AREAS) {
+      if (this._finalConfig[areaName] !== undefined) {
+        const div = document.createElement("div");
+        div.className = `grid-item ${areaName}`;
+        div.dataset.area = areaName;
+        wrapper.appendChild(div);
+      }
+    }
+    this.shadowRoot.innerHTML = '';
+    this.shadowRoot.appendChild(style);
+    this.shadowRoot.appendChild(wrapper);
+    if (window.provideHass) window.provideHass(this);
   }
 
-  getCardSize() {
-    return 1;
+  _applyDynamicStyles() {
+    if (!this._finalConfig || !this.shadowRoot) return;
+    const wrapper = this.shadowRoot.querySelector(".grid-container");
+    if (!wrapper) return;
+    let wrapperCssText = '';
+    if (this._finalConfig.styles?.grid) {
+        wrapperCssText += this._arrayStylesToString(this._finalConfig.styles.grid);
+    }
+    if (this._finalConfig.styles?.card) {
+        wrapperCssText += this._arrayStylesToString(this._finalConfig.styles.card);
+    }
+    if (this._finalConfig.tap_action && this._finalConfig.tap_action.action !== 'none') {
+        wrapperCssText += 'cursor: pointer;';
+    }
+    wrapper.style.cssText = wrapperCssText;
+    this.shadowRoot.querySelectorAll('.grid-item').forEach(el => {
+        const areaName = el.dataset.area;
+        if (!areaName) return;
+        let css = `grid-area: ${areaName};`;
+        const isBuiltIn = this.BUILT_IN_AREAS.includes(areaName);
+        if (isBuiltIn) {
+            if (this._finalConfig.styles?.[areaName]) {
+                css += this._arrayStylesToString(this._finalConfig.styles[areaName]);
+            }
+        } else {
+            if (this._finalConfig.styles?.custom_grid_areas?.[areaName]) {
+                css += this._arrayStylesToString(this._finalConfig.styles.custom_grid_areas[areaName]);
+            }
+        }
+        el.style.cssText = css;
+    });
+    for (const areaName of this.BUILT_IN_AREAS) {
+      if (this._finalConfig[areaName] === undefined) continue;
+      const el = this.shadowRoot.querySelector(`.grid-item[data-area="${areaName}"]`);
+      if (!el) continue;
+      const content = this._evaluateTemplate(this._finalConfig[areaName]);
+      if (areaName === 'icon') this._updateIcon(el, content);
+      else if (el.innerHTML !== content) el.innerHTML = content;
+    }
   }
+
+  // ** FULLY DYNAMIC ACTION HANDLER **
+  _handleTap() {
+    // ================== START: 新的、更可靠的触感反馈逻辑 ==================
+    // 检查 'tap_action_vibration' 配置项是否为 true
+    if (this._finalConfig.tap_action_vibration) {
+      // 获取震动类型，如果用户未指定，则默认为 'heavy'
+      const hapticType = this._finalConfig.tap_action_vibration_type || 'heavy';
+
+      // 分发标准的 'haptic' 前端事件，HA伴侣应用会捕获并处理它
+      this.dispatchEvent(new CustomEvent('haptic', {
+        bubbles: true,
+        composed: true,
+        detail: hapticType
+      }));
+    }
+    // ==================  END: 新的触感反馈逻辑  ==================
+
+    const rawActionConfig = this._finalConfig.tap_action;
+    if (!rawActionConfig || !this._hass) {
+      return;
+    }
+
+    // **NEW**: Evaluate the entire action config object at the moment of the tap
+    const actionConfig = this._evaluateActionConfig(rawActionConfig);
+
+    if (actionConfig.action === 'none') {
+      return;
+    }
+
+    const dispatch = (eventName, detail) => {
+      this.dispatchEvent(new CustomEvent(eventName, {
+        bubbles: true, composed: true, detail: detail,
+      }));
+    };
+
+    const entityIdForAction =
+      actionConfig.entity ||
+      (actionConfig.target && actionConfig.target.entity_id) ||
+      this._finalConfig.entity;
+
+    let action = actionConfig.action;
+
+    if (action === 'perform-action' && actionConfig.perform_action) {
+      action = 'call-service';
+    } else if (action && action.includes('.') && !['call-service', 'more-info'].includes(action)) {
+       action = 'call-service';
+    }
+
+    switch (action) {
+      case 'more-info': {
+        if (!entityIdForAction) {
+          console.warn('grid-template-card: action "more-info" could not find an entity.');
+          return;
+        }
+        dispatch('hass-more-info', { entityId: entityIdForAction });
+        break;
+      }
+
+      case 'toggle': {
+        if (!entityIdForAction) {
+          console.warn('grid-template-card: action "toggle" could not find an entity.');
+          return;
+        }
+        this._hass.callService('homeassistant', 'toggle', { entity_id: entityIdForAction });
+        break;
+      }
+
+      case 'call-service': {
+        const serviceCall = actionConfig.action.includes('.') ? actionConfig.action : actionConfig.service || actionConfig.perform_action;
+        if (!serviceCall) {
+          console.warn('grid-template-card: "call-service" action missing "service" definition.');
+          return;
+        }
+        const [domain, service] = serviceCall.split('.', 2);
+        const serviceData = { ...actionConfig.target, ...actionConfig.data, ...actionConfig.service_data };
+        this._hass.callService(domain, service, serviceData);
+        break;
+      }
+
+      case 'navigate': {
+        const path = actionConfig.navigation_path;
+        if (!path) {
+          console.warn('grid-template-card: "navigate" action missing "navigation_path".');
+          return;
+        }
+        dispatch('hass-navigate', { path });
+        break;
+      }
+
+      case 'url': {
+        const url = actionConfig.url_path;
+        if (!url) {
+          console.warn('grid-template-card: "url" action missing "url_path".');
+          return;
+        }
+        window.open(url, '_blank', 'noopener');
+        break;
+      }
+
+      default:
+        console.warn(`grid-template-card: Unhandled action type: ${actionConfig.action}`);
+    }
+  }
+
+
+  _updateIcon(element, iconValue) {
+    const currentElement = element.firstElementChild;
+    const isImagePath = typeof iconValue === 'string' && (iconValue.includes('/') || iconValue.includes('.'));
+    if (isImagePath) {
+      if (currentElement?.tagName !== 'IMG' || currentElement.src !== iconValue) element.innerHTML = `<img src="${iconValue}" class="built-in-element">`;
+    } else {
+      if (currentElement?.tagName !== 'HA-ICON' || currentElement.icon !== iconValue) element.innerHTML = `<ha-icon icon="${iconValue}" class="built-in-element"></ha-icon>`;
+    }
+  }
+
+  _arrayStylesToString(arr) { if (!Array.isArray(arr)) return ''; let cssText = ''; arr.forEach((styleObject) => { if (typeof styleObject !== 'object' || styleObject === null) return; for (const [key, rawValue] of Object.entries(styleObject)) { const evaluatedValue = this._evaluateTemplate(rawValue); if (evaluatedValue !== undefined && evaluatedValue !== null && String(evaluatedValue) !== '') { cssText += `${key}: ${evaluatedValue};`; } } }); return cssText; }
+  
+  // --- Helper functions (Unchanged) ---
+  static _getGlobalTemplates() { try { const ha=document.querySelector("home-assistant"),main=ha?.shadowRoot?.querySelector("home-assistant-main"),panel=main?.shadowRoot?.querySelector("ha-panel-lovelace"),cfg=panel?.lovelace?.config; return cfg?.grid_template_card_templates||cfg?.button_card_templates||{} } catch(e){return{}} }
+  static _deepClone(obj) { if(obj===null||typeof obj!=="object")return obj;if(Array.isArray(obj))return obj.map(x=>GridTemplateCard._deepClone(x));const out={};for(const k of Object.keys(obj))out[k]=GridTemplateCard._deepClone(obj[k]);return out }
+  static _deepMerge(base,ext){if(base===null||typeof base!=="object")return GridTemplateCard._deepClone(ext);if(ext===null||typeof ext!=="object")return GridTemplateCard._deepClone(base);const out=Array.isArray(base)?base.slice():{...base};if(Array.isArray(base)&&Array.isArray(ext))return base.concat(ext);for(const k of Object.keys(ext)){const bv=out[k],ev=ext[k];if(Array.isArray(bv)&&Array.isArray(ev))out[k]=bv.concat(ev);else if(bv&&typeof bv==="object"&&ev&&typeof ev==="object")out[k]=GridTemplateCard._deepMerge(bv,ev);else out[k]=GridTemplateCard._deepClone(ev)}return out}
+  _resolveTemplatesAndVariables(inputCfg){const globalTpl=GridTemplateCard._getGlobalTemplates(),tplEntries=[],pushByName=name=>{if(!name||typeof name!=="string")return;const def=globalTpl[name];if(!def){console.warn("[grid-template-card] 未找到模板:",name);return}tplEntries.push({name,def})};const rawTemplate=inputCfg.template??inputCfg.templates;if(rawTemplate){if(typeof rawTemplate==="string")pushByName(rawTemplate);else if(Array.isArray(rawTemplate))rawTemplate.forEach(pushByName)}const visited=new Set,unfold=tplDef=>{const name=Object.entries(globalTpl).find(([k,v])=>v===tplDef)?.[0];if(name){if(visited.has(name)){console.warn("[grid-template-card] 模板循环：",name);return{}}visited.add(name)}let merged={};const parentRef=tplDef?.template??tplDef?.templates;if(parentRef){const parents=Array.isArray(parentRef)?parentRef:[parentRef];for(const pName of parents){const pd=globalTpl[pName];if(!pd){console.warn("[grid-template-card] 模板未找到（父）:",pName);continue}merged=GridTemplateCard._deepMerge(merged,unfold(pd))}}merged=GridTemplateCard._deepMerge(merged,tplDef||{});return merged};let mergedCfg={};for(const{def:def}of tplEntries)mergedCfg=GridTemplateCard._deepMerge(mergedCfg,unfold(def));const tplVars=mergedCfg.variables||{},userVars=inputCfg.variables||{},finalVars=GridTemplateCard._deepMerge(tplVars,userVars);const{template,templates,variables,...restInput}=inputCfg;const finalCfg=GridTemplateCard._deepMerge(mergedCfg,restInput);return{finalCfg,finalVars}}
+  async _loadCards() {
+    const wrapper = this.shadowRoot.querySelector(".grid-container");
+    if (!wrapper) return;
+    const areas = this._finalConfig.custom_grid_areas || {};
+    const helpers = await window.loadCardHelpers();
+    for (const areaName of Object.keys(areas)) {
+      const areaConfig = areas[areaName];
+      if (!areaConfig || !areaConfig.card) continue;
+      const slot = wrapper.querySelector(`.grid-item[data-area="${areaName}"]`);
+      if (!slot) continue;
+      let finalCardConfig = GridTemplateCard._deepClone(areaConfig.card);
+      if (finalCardConfig.type === 'custom:grid-template-card') {
+        const parentVars = this._variables || {};
+        const childOwnVars = finalCardConfig.variables || {};
+        finalCardConfig.variables = GridTemplateCard._deepMerge(parentVars, childOwnVars);
+      }
+      try {
+        const cardElement = await helpers.createCardElement(finalCardConfig); 
+        cardElement.hass = this._hass;
+        slot.innerHTML = '';
+        slot.appendChild(cardElement);
+      } catch (e) {
+        console.error(`[grid-template-card] 创建卡片失败 '${areaName}':`, e);
+        const errorCard = document.createElement("hui-error-card");
+        errorCard.setConfig({ type: "error", error: e.message, origConfig: areaConfig.card });
+        slot.innerHTML = '';
+        slot.appendChild(errorCard);
+      }
+    }
+  }
+  getCardSize() { return this._finalConfig?.card_size || 3; }
 }
 
 if (!customElements.get('grid-template-card')) {
   customElements.define('grid-template-card', GridTemplateCard);
-}
-window.customCards = window.customCards || [];
-if (!window.customCards.some((c) => c.type === 'grid-template-card')) {
-  window.customCards.push({ 
-    type: 'grid-template-card', 
-    name: 'Grid template Card', 
-    description: '一个自定义grid网格布局卡片' 
+  window.customCards = window.customCards || [];
+  window.customCards.push({
+    type: 'grid-template-card',
+    name: 'Grid Template Card v2.0.0',
+    description: '一个支持模板和内置区域的网格布局卡片。'
   });
 }
