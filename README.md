@@ -21,6 +21,7 @@
 |type|卡片调用| 必须| type: custom:grid-template-card|
 |varibales|可配置变量，方便卡片复用与模板复用|可选，支持静态内容，或js模板动态返回，如果内嵌卡片也为grid-template-card，变量可以逐级向上读取| 见下文详情|
 |template|卡片模板,可同一仪表盘内复用|可选，使用方法与button-card一致| 见下文详情|
+|is_nested|是否为被嵌套环境|可选，如在嵌入到其他卡片内时，出现显示问题，可尝试启用此配置|is_nested: true|
 |name|文本元素，受grid布局控制，不配置时不显示|可选，支持静态内容，或js模板动态返回|name: 我的名字|
 |state|文本元素，受grid布局控制，不配置时不显示|可选，支持静态内容，或js模板动态返回|state: 12138|
 |label|文本元素，受grid布局控制，不配置时不显示|可选，支持静态内容，或js模板动态返回|label: 我的标签|
