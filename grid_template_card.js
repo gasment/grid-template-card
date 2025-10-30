@@ -1,4 +1,4 @@
-//v2.0.0
+//v2.0.1
 class GridTemplateCard extends HTMLElement {
   constructor() {
     super();
@@ -67,17 +67,54 @@ class GridTemplateCard extends HTMLElement {
 
   _render() {
     const style = document.createElement("style");
+    // === 核心样式定义 ===
     style.textContent = `
-      .grid-container { display: grid; width: 100%; }
-      .grid-item { box-sizing: border-box; min-width: 0; min-height: 0; overflow: visible; display: flex; align-items: center; justify-content: center; }
-      .grid-item > * { width: 100%; height: 100%; }
-      .grid-item.icon { overflow: visible; }
-      .grid-item img { max-width: 100%; max-height: 100%; object-fit: contain; }
-      .grid-item ha-icon { width: 100%; height: 100%; }
+      .grid-container {
+        display: grid;
+        width: 100%;
+      }
+      .grid-item {
+        box-sizing: border-box;
+        min-width: 0;
+        min-height: 0;
+        overflow: visible;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+      .grid-item > * {
+        width: 100%;
+        height: 100%;
+      }
+      .grid-item.icon {
+        overflow: visible;
+      }
+      .grid-item img {
+        max-width: 100%;
+        max-height: 100%;
+        object-fit: contain;
+      }
+      .grid-item ha-icon {
+        width: 100%;
+        height: 100%;
+      }
     `;
+
+    // === 针对嵌套模式 embedded: true 的层级修正 ===
+    if (this._finalConfig.embedded) {
+      style.textContent += `
+        .grid-container {
+          position: relative !important;
+          z-index: 10 !important;
+        }
+      `;
+    }
+
+    // === 构建 DOM ===
     const wrapper = document.createElement("div");
     wrapper.className = "grid-container";
-    wrapper.addEventListener('mousedown', () => this._handleTap());
+    wrapper.addEventListener("mousedown", () => this._handleTap());
+
     const customAreas = this._finalConfig.custom_grid_areas || {};
     for (const areaName of Object.keys(customAreas)) {
       const div = document.createElement("div");
@@ -85,6 +122,7 @@ class GridTemplateCard extends HTMLElement {
       div.dataset.area = areaName;
       wrapper.appendChild(div);
     }
+
     for (const areaName of this.BUILT_IN_AREAS) {
       if (this._finalConfig[areaName] !== undefined) {
         const div = document.createElement("div");
@@ -93,11 +131,14 @@ class GridTemplateCard extends HTMLElement {
         wrapper.appendChild(div);
       }
     }
-    this.shadowRoot.innerHTML = '';
+
+    this.shadowRoot.innerHTML = "";
     this.shadowRoot.appendChild(style);
     this.shadowRoot.appendChild(wrapper);
+
     if (window.provideHass) window.provideHass(this);
   }
+
 
   _applyDynamicStyles() {
     if (!this._finalConfig || !this.shadowRoot) return;
@@ -300,7 +341,7 @@ if (!customElements.get('grid-template-card')) {
   window.customCards = window.customCards || [];
   window.customCards.push({
     type: 'grid-template-card',
-    name: 'Grid Template Card v2.0.0',
+    name: 'Grid Template Card v2.0.1',
     description: '一个支持模板和内置区域的网格布局卡片。'
   });
 }
