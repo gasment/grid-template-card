@@ -100,8 +100,8 @@ class GridTemplateCard extends HTMLElement {
       }
     `;
 
-    // === 针对嵌套模式 embedded: true 的层级修正 ===
-    if (this._finalConfig.embedded) {
+    // === 针对嵌套模式 is_nested: true 的层级修正 ===
+    if (this._finalConfig.is_nested) {
       style.textContent += `
         .grid-container {
           position: relative !important;
