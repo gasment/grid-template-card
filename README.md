@@ -28,6 +28,8 @@
 |icon|图标元素，受grid布局控制，不配置时不显示|可选，支持内置mdi，或文件路径，支持js模板动态返回|icon: mdi:xxxxxx|
 |tap_action_vibration|点击附带震动效果，仅支持官方APP,不支持web|可选，接受true/false|tap_action_vibration: true|
 |tap_action_vibration_type|震动效果选择|可选，支持官方几种预设效果：success, warning, failure, light, medium, heavy, selection，不配置则默认heavy| tap_action_vibration_type: selection|
+|confirm_dialog|开启二次确认弹窗，用于防误触|可选，接受true/false|confirm_dialog: true|
+|confirm_dialog_content|二次确认弹窗内的自定义文本|可选，接受文本字符串|confirm_dialog_content: 点了就爆炸|
 |tap_action|点击动作，调用HA服务|可选，支持HA标准action写法| 见下文详情|
 |styles|卡片内各元素的css样式设置|可选，支持通用标准css样式插入|见下文详情|
 |custom_grid_areas|内嵌子卡片的入口|可选，理论上支持所有卡片|见下文详情|
