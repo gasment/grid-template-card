@@ -1,4 +1,4 @@
-// v2.1.0
+// v2.1.1
 class GridTemplateCard extends HTMLElement {
   constructor() {
     super();
@@ -429,10 +429,66 @@ class GridTemplateCard extends HTMLElement {
         this._hass.callService(domain, service, serviceData);
         break;
       }
-      case 'navigate':
-        if (!actionConfig.navigation_path) return;
-        dispatch('hass-navigate', { path: actionConfig.navigation_path });
-        break;
+
+    case 'navigate': {
+      const path = actionConfig.navigation_path;
+      if (!path) {
+        console.warn('grid-template-card: "navigate" action missing "navigation_path".');
+        return;
+      }
+
+      const target = actionConfig.navigation_target || '_self';
+      const replace = !!actionConfig.replace;
+
+      // 1) 尝试交给 HA 自己处理
+      dispatch('hass-navigate', { path, replace });
+
+      // 2) 微任务后检查是否生效；未生效则执行回退方案（兼容 iOS）
+      const beforeHref = window.location.href;
+      setTimeout(() => {
+        const stillSame = window.location.href === beforeHref;
+        if (!stillSame) return;
+
+        try {
+          if (target === '_self') {
+            if (replace) {
+              window.history.replaceState(null, "", path);
+            } else {
+              window.history.pushState(null, "", path);
+            }
+            window.dispatchEvent(new CustomEvent("location-changed", { bubbles: true, composed: true }));
+            // 再次检测
+            if (window.location.href !== beforeHref) return;
+          } else {
+            // 新窗口/标签
+            window.open(path, target, 'noopener');
+            return;
+          }
+        } catch (e) {
+          // 忽略，继续更强兜底
+        }
+
+        // 3) iOS 最稳定：隐形 <a> 点击（保留用户手势语义）
+        try {
+          const a = document.createElement('a');
+          a.href = path;
+          a.target = target;
+          a.rel = 'noopener';
+          a.style.position = 'absolute';
+          a.style.left = '-9999px';
+          document.body.appendChild(a);
+          a.click();
+          a.remove();
+          return;
+        } catch (e) {}
+
+        // 4) 最终兜底：强制跳转（会整页刷新）
+        window.location.assign(path);
+      }, 0);
+
+      break;
+    }
+
       case 'url':
         if (!actionConfig.url_path) return;
         window.open(actionConfig.url_path, '_blank', 'noopener');
@@ -619,7 +675,7 @@ if (!customElements.get('grid-template-card')) {
   window.customCards = window.customCards || [];
   window.customCards.push({
     type: 'grid-template-card',
-    name: 'Grid Template Card v2.1.0',
+    name: 'Grid Template Card v2.1.1',
     description: '一个支持模板和内置区域的网格布局卡片'
   });
 }
