@@ -1,4 +1,4 @@
-// v2.1.1
+// v2.2.1
 class GridTemplateCard extends HTMLElement {
   constructor() {
     super();
@@ -119,6 +119,40 @@ class GridTemplateCard extends HTMLElement {
       .grid-container {
         display: grid;
         width: 100%;
+        /* 保持右侧内边距，确保滚动条不贴边 */
+        padding-right: 6px; /* 维持这个值，或根据需要微调 */
+        padding-bottom: 6px; /* 增加底部内边距，让水平滚动条也缩短 */
+
+        /* 滚动条样式 */
+        scrollbar-width: thin; /* Firefox */
+        scrollbar-color: var(--scrollbar-thumb-color, #888) var(--scrollbar-track-color, #f1f1f1);
+      }
+
+      /* WebKit/Chromium (包括 Android WebView) */
+      .grid-container::-webkit-scrollbar {
+        /* 整个滚动条区域的宽度/高度 */
+        width: 10px;  /* 垂直滚动条区域宽度，确保有足够空间容纳滑块的透明边框 */
+        height: 10px; /* 水平滚动条区域高度，同上 */
+        background-color: transparent; /* 确保整个滚动条区域是透明的 */
+      }
+
+      .grid-container::-webkit-scrollbar-track {
+        background: transparent; /* 轨道背景保持透明 */
+      }
+
+      .grid-container::-webkit-scrollbar-thumb {
+        background: var(--scrollbar-thumb-color, #888);
+        border-radius: 5px; /* 滑块自身的圆角 */
+        /* 关键：增加透明边框的宽度，让滑块看起来更短且更窄 */
+        /* 垂直滚动条：上下边框影响长度，左右边框影响宽度 */
+        /* 水平滚动条：左右边框影响长度，上下边框影响宽度 */
+        border: 3.5px solid transparent; /* 进一步增加透明边框，同时影响长度和宽度 */
+        /* 你也可以分开设置：border: 4px 3px solid transparent; (上下4px，左右3px) */
+        background-clip: padding-box; /* 确保背景只在内边距区域绘制 */
+      }
+
+      .grid-container::-webkit-scrollbar-thumb:hover {
+        background: var(--scrollbar-hover-color, #555);
       }
       .grid-item {
         box-sizing: border-box;
@@ -675,7 +709,7 @@ if (!customElements.get('grid-template-card')) {
   window.customCards = window.customCards || [];
   window.customCards.push({
     type: 'grid-template-card',
-    name: 'Grid Template Card v2.1.1',
+    name: 'Grid Template Card v2.2.1',
     description: '一个支持模板和内置区域的网格布局卡片'
   });
 }
